@@ -36,12 +36,18 @@ type Options struct {
 	Timeout       time.Duration // per config request, default 10 s
 	HTTPClient    *http.Client  // default &http.Client{}
 	Logger        *slog.Logger  // default slog.Default()
+	// DisableExposures stops sending evaluation counts. By default the provider sends, once a minute, how many
+	// times each flag returned each variation, so Release Watch can measure rollouts. Counts only: no
+	// contexts or user ids leave your process.
+	DisableExposures bool
+	ExposureInterval time.Duration // default 1 minute
 }
 
 // Provider is an OpenFeature provider that evaluates flags locally.
 type Provider struct {
-	source *ConfigSource
-	events chan of.Event
+	source    *ConfigSource
+	events    chan of.Event
+	exposures *exposureCounter
 }
 
 var (
@@ -57,6 +63,9 @@ func NewProvider(o Options) (*Provider, error) {
 		return nil, err
 	}
 	p := &Provider{source: src, events: make(chan of.Event, 64)}
+	if !o.DisableExposures {
+		p.exposures = newExposureCounter(src, o.ExposureInterval)
+	}
 	src.OnChange(p.changed)
 	return p, nil
 }
@@ -68,9 +77,31 @@ func (p *Provider) Metadata() of.Metadata { return of.Metadata{Name: "railflag"}
 
 func (p *Provider) Hooks() []of.Hook { return nil }
 
-func (p *Provider) Init(of.EvaluationContext) error { return p.source.Start(context.Background()) }
+func (p *Provider) Init(of.EvaluationContext) error {
+	if err := p.source.Start(context.Background()); err != nil {
+		return err
+	}
+	if p.exposures != nil {
+		p.exposures.start()
+	}
+	return nil
+}
 
-func (p *Provider) Shutdown() { p.source.Stop() }
+// Shutdown stops the config source and sends any evaluation counts not sent yet.
+func (p *Provider) Shutdown() {
+	p.source.Stop()
+	if p.exposures != nil {
+		p.exposures.shutdown()
+	}
+}
+
+// FlushExposures sends the evaluation counts gathered so far. The provider does this every minute and on
+// Shutdown; call it yourself only in short-lived programs.
+func (p *Provider) FlushExposures() {
+	if p.exposures != nil {
+		p.exposures.flush()
+	}
+}
 
 func (p *Provider) EventChannel() <-chan of.Event { return p.events }
 
@@ -130,6 +161,9 @@ func (p *Provider) resolve(flag string, flatCtx of.FlattenedContext, expected st
 	}
 	if r.RuleID != "" {
 		meta["ruleId"] = r.RuleID
+	}
+	if p.exposures != nil && r.VariationIndex != nil {
+		p.exposures.record(flag, *r.VariationIndex)
 	}
 	return r.Value, of.ProviderResolutionDetail{Reason: of.Reason(r.Reason), Variant: strconv.Itoa(*r.VariationIndex), FlagMetadata: meta}
 }

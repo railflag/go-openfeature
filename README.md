@@ -37,6 +37,7 @@ on, _ := client.BooleanValue(ctx, "new-checkout", false,
 - `openfeature.AddHandler(openfeature.ProviderConfigChange, &fn)` tells you when flags change; `details.FlagChanges` lists them.
 - Call `openfeature.Shutdown()` on exit to close the stream.
 - Server keys can read every rule. Keep them on the server; browsers use the JavaScript SDK with a client key.
+- Once a minute the provider sends how many times each flag returned each variation, for [Release Watch](https://railflag.com/release-watch). It sends counts only, such as `{"new-checkout": {"1": 42}}`, and never contexts or user ids. Sending runs on a background goroutine and never delays a flag check. `openfeature.Shutdown()` sends what's left. Turn it off with `DisableExposures: true`.
 
 ## Same answers as every other SDK
 

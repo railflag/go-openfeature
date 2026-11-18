@@ -53,6 +53,7 @@ type fakeRelay struct {
 	down        bool
 	configCalls []int
 	streams     map[chan string]bool
+	exposures   []map[string]any
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -84,6 +85,13 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 	streamOK := r.streamOK
 	r.mu.Unlock()
 	switch req.URL.Path {
+	case "/sdk/v1/exposures":
+		var b map[string]any
+		json.NewDecoder(req.Body).Decode(&b)
+		r.mu.Lock()
+		r.exposures = append(r.exposures, b)
+		r.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
 	case "/sdk/v1/config":
 		etag := fmt.Sprintf(`"v%v"`, version)
 		r.mu.Lock()
